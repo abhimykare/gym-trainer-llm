@@ -1,0 +1,33 @@
+DEPLOYMENT STEPS FOR RENDER:
+
+1. Push to GitHub:
+   git add .
+   git commit -m "Production ready"
+   git push origin main
+
+2. Create Render Web Service:
+   - Go to https://render.com
+   - New + → Web Service
+   - Connect GitHub repo
+   - Render auto-detects render.yaml
+
+3. Add Environment Variables in Render Dashboard:
+   MONGODB_URI=mongodb+srv://abhi88wiz_db_user:Jo9T1h6Yxi86DSYi@cluster0.brv90ag.mongodb.net/gym-trainer
+   GEMINI_API_KEY=AIzaSyCCPV2AV0bXlGSkKz5KcVi1mTU0oAEIEJM
+
+4. Deploy:
+   - Click "Create Web Service"
+   - Wait 5-10 minutes for build
+   - Check logs for QR code
+
+5. Connect WhatsApp:
+   - View logs in Render dashboard
+   - Scan QR code with phone (8848091098)
+   - Bot connects and saves session
+
+6. Done! Bot is live 24/7
+
+IMPORTANT:
+- Session persists on disk (no need to re-scan)
+- Auto-reconnects if disconnected
+- Logs available in Render dashboard
