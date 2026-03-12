@@ -35,9 +35,19 @@ export class MessageRouter {
             return nextQuestion;
           }
         } else {
-          // Invalid input, ask again
-          const nextQuestion = memoryService.getNextProfileQuestion(user);
-          const response = `Invalid input! ${nextQuestion}`;
+          // Handle invalid input or greeting
+          let response;
+          if (profileUpdate.isGreeting || profileUpdate.invalidNickname || profileUpdate.invalidAge || 
+              profileUpdate.invalidHeight || profileUpdate.invalidWeight) {
+            const errorType = profileUpdate.isGreeting ? 'isGreeting' : 
+                            profileUpdate.invalidNickname ? 'invalidNickname' :
+                            profileUpdate.invalidAge ? 'invalidAge' :
+                            profileUpdate.invalidHeight ? 'invalidHeight' : 'invalidWeight';
+            response = memoryService.getInvalidInputMessage(user, errorType);
+          } else {
+            const nextQuestion = memoryService.getNextProfileQuestion(user);
+            response = nextQuestion;
+          }
           await conversationService.saveMessage(phoneNumber, response, 'assistant');
           return response;
         }

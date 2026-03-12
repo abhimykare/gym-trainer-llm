@@ -129,18 +129,41 @@ Summary:`;
    */
   getNextProfileQuestion(user) {
     if (!user.nickname) {
-      return "First things first - what should I call you? Give me a nickname! 💪";
+      return "Hey! I'm Arnold, your new gym trainer! 💪\n\nBefore we start crushing goals together, I need to know you better.\n\nWhat should I call you? Give me your name or nickname!";
     }
     if (!user.age) {
-      return "How old are you? Age matters for workout planning!";
+      return `Alright ${user.nickname}! How old are you? I need to know to plan your workouts properly!`;
     }
     if (!user.height) {
-      return "What's your height in centimeters? (e.g., 175)";
+      return `Got it! Now, what's your height in centimeters? (For example: 175)`;
     }
     if (!user.weight) {
-      return "Current weight in kilograms? (e.g., 70)";
+      return `Perfect! Last one - what's your current weight in kilograms? (For example: 70)`;
     }
     return null;
+  },
+
+  /**
+   * Get humanistic error message for invalid input
+   */
+  getInvalidInputMessage(user, errorType) {
+    if (errorType === 'invalidNickname') {
+      return "Come on, give me a proper name! What do your friends call you? Just your name, nothing fancy!";
+    }
+    if (errorType === 'invalidAge') {
+      return "That doesn't look right! How old are you really? Give me a number between 15 and 80!";
+    }
+    if (errorType === 'invalidHeight') {
+      return "That height doesn't make sense! Give me your height in centimeters. Like 170, 180, 175... you know what I mean!";
+    }
+    if (errorType === 'invalidWeight') {
+      return "That weight seems off! Give me your actual weight in kilograms. Be honest, I'm here to help!";
+    }
+    if (errorType === 'isGreeting') {
+      const nextQuestion = this.getNextProfileQuestion(user);
+      return nextQuestion;
+    }
+    return "I didn't get that. Try again!";
   },
 
   /**
@@ -149,23 +172,42 @@ Summary:`;
   async updateProfileFromMessage(phoneNumber, message, user) {
     try {
       const updates = {};
+      const lowerMessage = message.toLowerCase().trim();
       
-      if (!user.nickname && message.length < 30) {
-        updates.nickname = message.trim();
+      // Skip greetings and common phrases
+      const greetings = ['hi', 'hello', 'hey', 'good morning', 'good evening', 'sup', 'yo', 'hola'];
+      const isGreeting = greetings.some(greeting => lowerMessage === greeting || lowerMessage.startsWith(greeting + ' '));
+      
+      if (!user.nickname) {
+        // Don't accept greetings, single letters, or very short responses as nickname
+        if (!isGreeting && message.length >= 2 && message.length < 30 && !/^\d+$/.test(message)) {
+          updates.nickname = message.trim();
+        } else if (isGreeting) {
+          // User sent greeting, don't treat as nickname
+          return { updated: false, complete: false, isGreeting: true };
+        } else {
+          return { updated: false, complete: false, invalidNickname: true };
+        }
       } else if (!user.age) {
         const age = parseInt(message);
-        if (age > 10 && age < 100) {
+        if (age >= 15 && age <= 80) {
           updates.age = age;
+        } else {
+          return { updated: false, complete: false, invalidAge: true };
         }
       } else if (!user.height) {
         const height = parseInt(message);
-        if (height > 100 && height < 250) {
+        if (height >= 140 && height <= 220) {
           updates.height = height;
+        } else {
+          return { updated: false, complete: false, invalidHeight: true };
         }
       } else if (!user.weight) {
         const weight = parseInt(message);
-        if (weight > 30 && weight < 300) {
+        if (weight >= 40 && weight <= 200) {
           updates.weight = weight;
+        } else {
+          return { updated: false, complete: false, invalidWeight: true };
         }
       }
       
@@ -187,7 +229,7 @@ Summary:`;
           return {
             updated: true,
             complete: true,
-            message: `Perfect! Profile complete! 🔥\n\nNickname: ${updatedUser.nickname}\nAge: ${updatedUser.age}\nHeight: ${updatedUser.height}cm\nWeight: ${updatedUser.weight}kg\n\nNow let's get to work! Did you go to the gym today?`
+            message: `Perfect, ${updatedUser.nickname}! 💪\n\nYour Profile:\n👤 ${updatedUser.nickname}\n🎂 ${updatedUser.age} years old\n📏 ${updatedUser.height}cm\n⚖️ ${updatedUser.weight}kg\n\nAlright! Now let's get to WORK! Did you hit the gym today? Reply YES or NO!`
           };
         }
         
