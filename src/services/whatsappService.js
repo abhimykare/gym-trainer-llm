@@ -6,6 +6,7 @@ import { logger } from '../utils/logger.js';
 import { messageRouter } from '../controllers/messageRouter.js';
 import fs from 'fs';
 import QRCode from 'qrcode';
+import puppeteer from 'puppeteer';
 
 class WhatsAppService {
   constructor() {
@@ -18,23 +19,48 @@ class WhatsAppService {
     try {
       logger.info('Initializing WhatsApp client...');
       
+      // Try to find Chrome executable
+      let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
+      
+      if (!executablePath) {
+        // Try system Chrome on Mac
+        const macChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
+        const fs = await import('fs');
+        if (fs.existsSync(macChrome)) {
+          executablePath = macChrome;
+          logger.info('Using system Chrome from Applications');
+        } else {
+          try {
+            executablePath = puppeteer.executablePath();
+            logger.info('Using Puppeteer Chrome');
+          } catch (e) {
+            logger.warn('Could not find Chrome, will try without executablePath');
+          }
+        }
+      }
+      
+      const puppeteerConfig = {
+        headless: true,
+        args: [
+          '--no-sandbox',
+          '--disable-setuid-sandbox',
+          '--disable-dev-shm-usage',
+          '--disable-accelerated-2d-canvas',
+          '--no-first-run',
+          '--no-zygote',
+          '--disable-gpu',
+        ],
+      };
+      
+      if (executablePath) {
+        puppeteerConfig.executablePath = executablePath;
+      }
+      
       this.client = new Client({
         authStrategy: new LocalAuth({
           dataPath: config.whatsapp.sessionPath,
         }),
-        puppeteer: {
-          headless: true,
-          executablePath: process.env.PUPPETEER_EXECUTABLE_PATH || undefined,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-accelerated-2d-canvas',
-            '--no-first-run',
-            '--no-zygote',
-            '--disable-gpu',
-          ],
-        },
+        puppeteer: puppeteerConfig,
       });
 
       this.setupEventHandlers();
