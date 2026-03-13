@@ -13,6 +13,7 @@ class WhatsAppService {
     this.client = null;
     this.isReady = false;
     this.qrCodeData = null;
+    this.qrCount = 0;
   }
 
   async initialize() {
@@ -77,25 +78,29 @@ class WhatsAppService {
   setupEventHandlers() {
     // QR Code generation
     this.client.on('qr', async (qr) => {
+      this.qrCount++;
       this.qrCodeData = qr;
       
       logger.info('='.repeat(60));
-      logger.info('QR CODE RECEIVED - SCAN WITH WHATSAPP');
+      logger.info(`QR CODE #${this.qrCount} RECEIVED - SCAN WITH WHATSAPP`);
       logger.info('='.repeat(60));
       
       // Print to terminal (may break in Render UI)
       qrcode.generate(qr, { small: true });
       
       // Save QR as text
-      logger.info('\n📱 QR CODE DATA (copy this to generate QR):');
+      logger.info(`\n📱 QR CODE #${this.qrCount} DATA (copy this to generate QR):`);
       logger.info(qr);
-      logger.info('\n🔗 Or visit: https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(qr));
+      logger.info(`\n🔗 QR CODE #${this.qrCount} URL - CLICK TO OPEN:`);
+      logger.info('https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(qr));
+      logger.info('='.repeat(60));
+      logger.info(`⏰ QR Code #${this.qrCount} will expire in ~20 seconds. Wait for QR #${this.qrCount + 1} if this doesn't work!`);
       logger.info('='.repeat(60));
       
       // Try to save as image file
       try {
-        await QRCode.toFile('/tmp/whatsapp-qr.png', qr);
-        logger.info('✅ QR code saved to /tmp/whatsapp-qr.png');
+        await QRCode.toFile(`/tmp/whatsapp-qr-${this.qrCount}.png`, qr);
+        logger.info(`✅ QR code #${this.qrCount} saved to /tmp/whatsapp-qr-${this.qrCount}.png`);
       } catch (err) {
         logger.error('Could not save QR image:', err.message);
       }
