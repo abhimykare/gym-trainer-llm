@@ -3,13 +3,17 @@ services:
     name: whatsapp-gym-trainer
     runtime: node
     plan: starter
-    buildCommand: npm install
+    buildCommand: chmod +x install-chrome.sh && ./install-chrome.sh && npm install
     startCommand: npm start
     envVars:
       - key: NODE_ENV
         value: production
       - key: WHATSAPP_SESSION_PATH
         value: /opt/render/project/src/whatsapp-session
+      - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+        value: true
+      - key: PUPPETEER_EXECUTABLE_PATH
+        value: /usr/bin/google-chrome-stable
       - key: MONGODB_URI
         sync: false
       - key: GEMINI_API_KEY
