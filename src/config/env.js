@@ -15,6 +15,7 @@ export const config = {
   bot: {
     phoneNumber: process.env.BOT_PHONE_NUMBER || '',
   },
+  port: process.env.PORT || 3000,
 };
 
 // Validate required environment variables

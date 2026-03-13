@@ -1,15 +1,18 @@
+type: docker
+
 services:
   - type: web
     name: whatsapp-gym-trainer
-    runtime: node
+    runtime: docker
     plan: starter
-    buildCommand: chmod +x install-chrome.sh && ./install-chrome.sh && npm install
-    startCommand: npm start
+    dockerfilePath: ./Dockerfile
     envVars:
       - key: NODE_ENV
         value: production
+      - key: PORT
+        value: 3000
       - key: WHATSAPP_SESSION_PATH
-        value: /opt/render/project/src/whatsapp-session
+        value: /app/whatsapp-session
       - key: PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
         value: true
       - key: PUPPETEER_EXECUTABLE_PATH
@@ -20,5 +23,5 @@ services:
         sync: false
     disk:
       name: whatsapp-session
-      mountPath: /opt/render/project/src/whatsapp-session
+      mountPath: /app/whatsapp-session
       sizeGB: 1

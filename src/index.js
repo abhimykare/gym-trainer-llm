@@ -3,6 +3,7 @@ import { connectDatabase } from './config/database.js';
 import { whatsappService } from './services/whatsappService.js';
 import { reminderScheduler } from './schedulers/reminderScheduler.js';
 import { logger } from './utils/logger.js';
+import http from 'http';
 
 async function startBot() {
   try {
@@ -19,6 +20,17 @@ async function startBot() {
     
     logger.info('✅ Bot is running successfully!');
     logger.info('📱 Scan the QR code with WhatsApp to connect');
+    
+    // Create a simple HTTP server for Render health checks
+    const server = http.createServer((req, res) => {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('WhatsApp Bot is running');
+    });
+    
+    const PORT = process.env.PORT || 3000;
+    server.listen(PORT, () => {
+      logger.info(`Health check server running on port ${PORT}`);
+    });
     
   } catch (error) {
     logger.error('Failed to start bot:', error);
