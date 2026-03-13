@@ -1,33 +1,89 @@
-DEPLOYMENT STEPS FOR RENDER:
+RENDER DEPLOYMENT (FREE - DOCKER):
 
-1. Push to GitHub:
-   git add .
-   git commit -m "Production ready"
-   git push origin main
+CRITICAL: You MUST manually select Docker environment!
 
-2. Create Render Web Service:
-   - Go to https://render.com
-   - New + → Web Service
-   - Connect GitHub repo
-   - Render auto-detects render.yaml
+STEP 1: Delete Old Service
+---------------------------
+1. Go to Render Dashboard
+2. Find "whatsapp-gym-trainer" service
+3. Settings → Delete Service
+4. Confirm deletion
 
-3. Add Environment Variables in Render Dashboard:
-   MONGODB_URI=mongodb+srv://abhi88wiz_db_user:Jo9T1h6Yxi86DSYi@cluster0.brv90ag.mongodb.net/gym-trainer
-   GEMINI_API_KEY=AIzaSyCCPV2AV0bXlGSkKz5KcVi1mTU0oAEIEJM
+STEP 2: Create NEW Service (IMPORTANT!)
+----------------------------------------
+1. Click "New +" → "Web Service"
+2. Connect GitHub repository
+3. **IMPORTANT: Select "Docker" from Environment dropdown**
+   (NOT Node - this is the key!)
+4. Configure:
+   - Name: whatsapp-gym-trainer
+   - Region: Choose closest
+   - Branch: main
+   - Root Directory: leave empty
+   - **Environment: Docker** ← CRITICAL!
+   - Instance Type: Free
 
-4. Deploy:
-   - Click "Create Web Service"
-   - Wait 5-10 minutes for build
-   - Check logs for QR code
+STEP 3: Add Environment Variables
+----------------------------------
+In the Environment section, add:
 
-5. Connect WhatsApp:
-   - View logs in Render dashboard
-   - Scan QR code with phone (8848091098)
-   - Bot connects and saves session
+MONGODB_URI
+mongodb+srv://abhi88wiz_db_user:Jo9T1h6Yxi86DSYi@cluster0.brv90ag.mongodb.net/gym-trainer
 
-6. Done! Bot is live 24/7
+GEMINI_API_KEY
+AIzaSyCCPV2AV0bXlGSkKz5KcVi1mTU0oAEIEJM
 
-IMPORTANT:
-- Session persists on disk (no need to re-scan)
-- Auto-reconnects if disconnected
-- Logs available in Render dashboard
+WHATSAPP_SESSION_PATH
+/app/whatsapp-session
+
+PUPPETEER_EXECUTABLE_PATH
+/usr/bin/google-chrome-stable
+
+PUPPETEER_SKIP_CHROMIUM_DOWNLOAD
+true
+
+PORT
+3000
+
+STEP 4: Add Persistent Disk
+----------------------------
+1. Scroll to "Disk" section
+2. Click "Add Disk"
+3. Name: whatsapp-session
+4. Mount Path: /app/whatsapp-session
+5. Size: 1 GB
+
+STEP 5: Deploy
+--------------
+1. Click "Create Web Service"
+2. Wait 15-20 minutes (Docker build takes time)
+3. Watch logs - you'll see Docker building Chrome
+4. Look for QR code in logs
+
+STEP 6: Connect WhatsApp
+-------------------------
+1. View logs in Render dashboard
+2. Find QR code (ASCII art)
+3. Open WhatsApp on phone (8848091098)
+4. Settings → Linked Devices → Link a Device
+5. Scan QR code
+6. Session saves to disk!
+
+TROUBLESHOOTING:
+----------------
+If you see "Running 'node src/index.js'" in logs:
+→ You selected Node environment instead of Docker!
+→ Delete service and recreate with Docker environment
+
+If you see Docker build logs:
+→ ✅ Correct! Wait for build to complete
+
+COST: $0/month (Free tier)
+
+NOTE: Free tier may sleep after 15 min inactivity.
+Upgrade to Starter ($7/month) for always-on.
+
+
+
+
+
