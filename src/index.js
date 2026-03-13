@@ -4,10 +4,55 @@ import { whatsappService } from './services/whatsappService.js';
 import { reminderScheduler } from './schedulers/reminderScheduler.js';
 import { logger } from './utils/logger.js';
 import http from 'http';
+import fs from 'fs';
+import path from 'path';
+
+// Clear cache on first startup
+function clearCache() {
+  try {
+    const sessionPath = config.whatsapp.sessionPath;
+    
+    // Check if this is first run (no session exists)
+    if (fs.existsSync(sessionPath)) {
+      const files = fs.readdirSync(sessionPath);
+      if (files.length === 0) {
+        logger.info('Session folder is empty, this is first run');
+      } else {
+        logger.info('Existing session found, will reuse it');
+      }
+    } else {
+      logger.info('No session folder found, creating fresh session');
+      fs.mkdirSync(sessionPath, { recursive: true });
+    }
+    
+    // Clear any temporary cache files
+    const tempPaths = ['/tmp/whatsapp-qr*.png'];
+    tempPaths.forEach(pattern => {
+      try {
+        const dir = path.dirname(pattern);
+        const files = fs.readdirSync(dir);
+        files.forEach(file => {
+          if (file.startsWith('whatsapp-qr')) {
+            fs.unlinkSync(path.join(dir, file));
+            logger.info(`Cleared temp file: ${file}`);
+          }
+        });
+      } catch (err) {
+        // Ignore errors for temp files
+      }
+    });
+    
+  } catch (error) {
+    logger.warn('Error during cache cleanup:', error.message);
+  }
+}
 
 async function startBot() {
   try {
     logger.info('🤖 Starting WhatsApp AI Gym Trainer Bot...');
+    
+    // Clear cache first
+    clearCache();
     
     // Connect to MongoDB
     await connectDatabase();
