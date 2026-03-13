@@ -4,5 +4,3 @@ whatsapp-session/
 .cache/
 *.log
 .DS_Store
-Dockerfile
-render.yaml
