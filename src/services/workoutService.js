@@ -1,146 +1,50 @@
-import pkg from 'whatsapp-web.js';
-const { Client, RemoteAuth } = pkg;
-
-import { MongoStore } from 'wwebjs-mongo';
-import mongoose from 'mongoose';
-
+import { Workout } from '../models/Workout.js';
 import { logger } from '../utils/logger.js';
-import { messageRouter } from '../controllers/messageRouter.js';
 
-class WhatsAppService {
-  constructor() {
-    this.client = null;
-    this.isReady = false;
-    this.qrCodeData = null;
-    this.qrCount = 0;
-  }
-
-  async initialize() {
+export const workoutService = {
+  async saveWorkout(phoneNumber, userId, workoutData) {
     try {
-      logger.info('🚀 Initializing WhatsApp...');
-
-      // ✅ Mongo store for session persistence
-      const store = new MongoStore({ mongoose });
-
-      this.client = new Client({
-        authStrategy: new RemoteAuth({
-          store,
-          backupSyncIntervalMs: 300000,
-        }),
-
-        puppeteer: {
-          headless: true,
-          args: [
-            '--no-sandbox',
-            '--disable-setuid-sandbox',
-            '--disable-dev-shm-usage',
-            '--disable-gpu'
-          ],
-        },
-
-        qrMaxRetries: 20,
-        restartOnAuthFail: true,
+      const workout = await Workout.create({
+        userId,
+        phoneNumber,
+        ...workoutData,
       });
-
-      this.setupEventHandlers();
-
-      // ❗ DO NOT BLOCK HERE
-      this.client.initialize();
-
+      logger.info(`Workout saved for: ${phoneNumber}`);
+      return workout;
     } catch (error) {
-      logger.error('❌ WhatsApp init failed:', error.message);
-      setTimeout(() => this.initialize(), 15000);
+      logger.error('Error saving workout:', error);
+      throw error;
     }
-  }
+  },
 
-  setupEventHandlers() {
-    this.client.on('qr', (qr) => {
-      this.qrCount++;
-      this.qrCodeData = qr;
-
-      const url = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
-
-      console.log('\n' + '='.repeat(60));
-      console.log(`QR CODE #${this.qrCount}`);
-      console.log(url);
-      console.log('='.repeat(60) + '\n');
-
-      logger.info(`📲 QR generated (#${this.qrCount})`);
-    });
-
-    this.client.on('authenticated', () => {
-      logger.info('🔥 AUTHENTICATED');
-    });
-
-    this.client.on('ready', () => {
-      this.isReady = true;
-      logger.info('🚀 WhatsApp READY');
-    });
-
-    this.client.on('change_state', (state) => {
-      logger.info(`🔄 STATE: ${state}`);
-    });
-
-    this.client.on('loading_screen', (percent, message) => {
-      logger.info(`⏳ Loading: ${percent}% - ${message}`);
-    });
-
-    this.client.on('auth_failure', (msg) => {
-      logger.error(`❌ AUTH FAILURE: ${msg}`);
-      this.isReady = false;
-    });
-
-    this.client.on('disconnected', (reason) => {
-      logger.warn(`⚠️ Disconnected: ${reason}`);
-      this.isReady = false;
-      setTimeout(() => this.initialize(), 10000);
-    });
-
-    this.client.on('message', async (message) => {
-      await this.handleIncomingMessage(message);
-    });
-  }
-
-  async handleIncomingMessage(message) {
+  async getLastWorkout(phoneNumber) {
     try {
-      if (message.from.includes('@g.us') || message.isStatus) return;
-
-      const phoneNumber = message.from;
-      const messageText = message.body;
-
-      logger.info(`📨 ${phoneNumber}: ${messageText}`);
-
-      const response = await messageRouter.handleMessage(phoneNumber, messageText);
-
-      await this.sendMessage(phoneNumber, response);
+      return await Workout.findOne({ phoneNumber }).sort({ date: -1 });
     } catch (error) {
-      logger.error('❌ Message handling error:', error);
+      logger.error('Error getting last workout:', error);
+      throw error;
     }
-  }
+  },
 
-  async sendMessage(phoneNumber, message) {
-    if (!this.isReady) {
-      logger.warn('⚠️ Cannot send — WhatsApp not ready');
-      return false;
-    }
-
+  async getWorkoutHistory(phoneNumber, limit = 10) {
     try {
-      await this.client.sendMessage(phoneNumber, message);
-      logger.info(`✉️ Sent to ${phoneNumber}`);
-      return true;
+      return await Workout.find({ phoneNumber }).sort({ date: -1 }).limit(limit);
     } catch (error) {
-      logger.error('❌ Send error:', error);
-      return false;
+      logger.error('Error getting workout history:', error);
+      throw error;
     }
-  }
+  },
 
-  getQRCode() {
-    return this.qrCodeData;
-  }
-
-  isClientReady() {
-    return this.isReady;
-  }
-}
-
-export const whatsappService = new WhatsAppService();
+  async markWorkoutComplete(workoutId) {
+    try {
+      return await Workout.findByIdAndUpdate(
+        workoutId,
+        { $set: { completed: true } },
+        { new: true }
+      );
+    } catch (error) {
+      logger.error('Error marking workout complete:', error);
+      throw error;
+    }
+  },
+};
