@@ -97,7 +97,6 @@ class WhatsAppService {
       logger.info(`⏰ QR Code #${this.qrCount} will expire in ~20 seconds. Wait for QR #${this.qrCount + 1} if this doesn't work!`);
       logger.info('='.repeat(60));
       
-      // Try to save as image file
       try {
         await QRCode.toFile(`/tmp/whatsapp-qr-${this.qrCount}.png`, qr);
         logger.info(`✅ QR code #${this.qrCount} saved to /tmp/whatsapp-qr-${this.qrCount}.png`);
@@ -106,30 +105,25 @@ class WhatsAppService {
       }
     });
 
-    // Authentication success
     this.client.on('authenticated', () => {
       logger.info('WhatsApp authenticated successfully');
     });
 
-    // Client ready
     this.client.on('ready', () => {
       this.isReady = true;
       logger.info('WhatsApp client is ready!');
     });
 
-    // Handle incoming messages
     this.client.on('message', async (message) => {
       await this.handleIncomingMessage(message);
     });
 
-    // Handle disconnection
     this.client.on('disconnected', (reason) => {
       logger.warn('WhatsApp client disconnected:', reason);
       this.isReady = false;
       this.reconnect();
     });
 
-    // Handle authentication failure
     this.client.on('auth_failure', (msg) => {
       logger.error('Authentication failure:', msg);
     });
@@ -137,7 +131,6 @@ class WhatsAppService {
 
   async handleIncomingMessage(message) {
     try {
-      // Ignore group messages and status updates
       if (message.from.includes('@g.us') || message.isStatus) {
         return;
       }
@@ -146,11 +139,7 @@ class WhatsAppService {
       const messageText = message.body;
 
       logger.info(`Message from ${phoneNumber}: ${messageText}`);
-
-      // Route message and get response
       const response = await messageRouter.handleMessage(phoneNumber, messageText);
-
-      // Send response
       await this.sendMessage(phoneNumber, response);
     } catch (error) {
       logger.error('Error handling incoming message:', error);
@@ -188,7 +177,7 @@ class WhatsAppService {
   getClient() {
     return this.client;
   }
-  
+
   getQRCode() {
     return this.qrCodeData;
   }
