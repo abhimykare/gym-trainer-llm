@@ -11,33 +11,41 @@ class WhatsAppService {
     this.isReady = false;
     this.qrCodeData = null;
     this.qrCount = 0;
+    this.initAttempt = 0;
   }
 
   async initialize() {
-    try {
-      logger.info('Initializing WhatsApp client...');
+    this.initAttempt++;
+    logger.info(`WhatsApp init attempt #${this.initAttempt}`);
 
+    try {
       let executablePath = process.env.PUPPETEER_EXECUTABLE_PATH;
 
       if (!executablePath) {
-        // Docker / Linux (Render)
-        const linuxChrome = '/usr/bin/google-chrome-stable';
         const { default: fs } = await import('fs');
-        if (fs.existsSync(linuxChrome)) {
-          executablePath = linuxChrome;
-          logger.info('Using google-chrome-stable (Linux/Docker)');
-        } else {
-          // Mac fallback
-          const macChrome = '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome';
-          if (fs.existsSync(macChrome)) {
-            executablePath = macChrome;
-            logger.info('Using system Chrome (Mac)');
+        const candidates = [
+          '/usr/bin/google-chrome-stable',
+          '/usr/bin/google-chrome',
+          '/usr/bin/chromium-browser',
+          '/usr/bin/chromium',
+          '/Applications/Google Chrome.app/Contents/MacOS/Google Chrome',
+        ];
+        for (const p of candidates) {
+          if (fs.existsSync(p)) {
+            executablePath = p;
+            logger.info(`Chrome found at: ${p}`);
+            break;
           }
         }
       }
 
+      if (!executablePath) {
+        throw new Error('No Chrome executable found. Set PUPPETEER_EXECUTABLE_PATH in env.');
+      }
+
       const puppeteerConfig = {
         headless: true,
+        executablePath,
         args: [
           '--no-sandbox',
           '--disable-setuid-sandbox',
@@ -47,108 +55,114 @@ class WhatsAppService {
           '--no-zygote',
           '--single-process',
           '--disable-gpu',
+          '--disable-extensions',
+          '--disable-background-networking',
+          '--disable-default-apps',
+          '--disable-sync',
+          '--metrics-recording-only',
+          '--mute-audio',
+          '--no-default-browser-check',
+          '--safebrowsing-disable-auto-update',
         ],
       };
-
-      if (executablePath) {
-        puppeteerConfig.executablePath = executablePath;
-        logger.info(`Chrome path: ${executablePath}`);
-      }
 
       this.client = new Client({
         authStrategy: new LocalAuth({
           dataPath: config.whatsapp.sessionPath,
         }),
         puppeteer: puppeteerConfig,
-        // Increase timeouts for slow environments like Render
-        authTimeoutMs: 120000,
-        qrMaxRetries: 10,
+        authTimeoutMs: 0,   // no timeout - wait as long as needed
+        qrMaxRetries: 20,   // keep generating QRs
+        restartOnAuthFail: true,
       });
 
-      // Register ALL event handlers BEFORE calling initialize()
       this.setupEventHandlers();
 
-      logger.info('Starting WhatsApp client initialization (waiting for QR or auth)...');
-      await this.client.initialize();
+      // client.initialize() resolves when the browser launches,
+      // NOT when WhatsApp is ready. We wrap it and wait for 'ready'.
+      await new Promise((resolve, reject) => {
+        // Resolve when WhatsApp is fully ready
+        this.client.once('ready', () => resolve());
+
+        // Also resolve if already authenticated (session restore path)
+        this.client.once('authenticated', () => {
+          logger.info('✅ Session authenticated - waiting for ready...');
+        });
+
+        // Reject on auth failure
+        this.client.once('auth_failure', (msg) => {
+          reject(new Error(`Auth failure: ${msg}`));
+        });
+
+        // Start the browser + WhatsApp
+        this.client.initialize().catch(reject);
+      });
+
+      logger.info('🚀 WhatsApp fully initialized and READY!');
 
     } catch (error) {
-      logger.error('Error initializing WhatsApp client:', error);
-      throw error;
+      logger.error(`WhatsApp init failed (attempt #${this.initAttempt}):`, error.message);
+      this.isReady = false;
+
+      // Auto-retry after delay
+      const delay = Math.min(15000 * this.initAttempt, 60000);
+      logger.info(`Retrying in ${delay / 1000}s...`);
+      setTimeout(() => this.initialize(), delay);
     }
   }
 
   setupEventHandlers() {
-    // QR Code
-    this.client.on('qr', async (qr) => {
-      this.qrCount++;
-      this.qrCodeData = qr;
-
-      const url = 'https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=' + encodeURIComponent(qr);
-
-      process.stdout.write('\n');
-      process.stdout.write('============================================================\n');
-      process.stdout.write(`QR CODE #${this.qrCount} - SCAN WITH WHATSAPP\n`);
-      process.stdout.write('============================================================\n');
-      process.stdout.write('QR DATA:\n');
-      process.stdout.write(qr + '\n');
-      process.stdout.write('\n');
-      process.stdout.write('QR URL (open in browser):\n');
-      process.stdout.write(url + '\n');
-      process.stdout.write('============================================================\n');
-      process.stdout.write('\n');
-
-      // Also log via logger for Render log stream
-      logger.info(`QR #${this.qrCount} DATA: ${qr}`);
-      logger.info(`QR #${this.qrCount} URL: ${url}`);
-
-      try {
-        await QRCode.toFile(`/tmp/whatsapp-qr-${this.qrCount}.png`, qr);
-        logger.info(`QR image saved: /tmp/whatsapp-qr-${this.qrCount}.png`);
-      } catch (err) {
-        // non-fatal
-      }
-    });
-
-    // Loading screen (fires during initialization)
     this.client.on('loading_screen', (percent, message) => {
       logger.info(`WhatsApp loading: ${percent}% - ${message}`);
     });
 
-    // Authenticated
-    this.client.on('authenticated', (session) => {
-      logger.info('✅ WhatsApp AUTHENTICATED successfully!');
-      logger.info('Session saved. Waiting for ready event...');
+    this.client.on('qr', async (qr) => {
+      this.qrCount++;
+      this.qrCodeData = qr;
+
+      const url = `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`;
+
+      // Use stdout directly - bypasses any logger buffering
+      process.stdout.write(`\n${'='.repeat(60)}\n`);
+      process.stdout.write(`QR CODE #${this.qrCount} - SCAN WITH WHATSAPP NOW\n`);
+      process.stdout.write(`${'='.repeat(60)}\n`);
+      process.stdout.write(`OPEN THIS URL IN BROWSER TO SEE QR:\n`);
+      process.stdout.write(`${url}\n`);
+      process.stdout.write(`${'='.repeat(60)}\n\n`);
+
+      logger.info(`QR #${this.qrCount} ready. URL logged above.`);
+
+      try {
+        await QRCode.toFile(`/tmp/whatsapp-qr-${this.qrCount}.png`, qr);
+      } catch (_) {}
     });
 
-    // Auth failure
+    this.client.on('authenticated', () => {
+      logger.info('✅ WhatsApp AUTHENTICATED!');
+    });
+
     this.client.on('auth_failure', (msg) => {
-      logger.error(`❌ WhatsApp auth FAILED: ${msg}`);
-      logger.error('Clearing session and restarting...');
-      this.clearSessionAndRestart();
+      logger.error(`❌ Auth FAILED: ${msg}`);
+      this.isReady = false;
+      this.clearSession().then(() => {
+        setTimeout(() => this.initialize(), 5000);
+      });
     });
 
-    // Ready
     this.client.on('ready', () => {
       this.isReady = true;
-      logger.info('🚀 WhatsApp client is READY! Bot is now active and listening for messages.');
+      this.initAttempt = 0; // reset backoff on success
+      logger.info('🚀 WhatsApp is READY! Bot is active.');
     });
 
-    // Incoming messages
     this.client.on('message', async (message) => {
       await this.handleIncomingMessage(message);
     });
 
-    // Disconnected
     this.client.on('disconnected', (reason) => {
       logger.warn(`WhatsApp disconnected: ${reason}`);
       this.isReady = false;
-      // Delay reconnect to avoid rapid loops
       setTimeout(() => this.reconnect(), 10000);
-    });
-
-    // Remote session saved
-    this.client.on('remote_session_saved', () => {
-      logger.info('Remote session saved successfully');
     });
   }
 
@@ -159,31 +173,31 @@ class WhatsAppService {
       const phoneNumber = message.from;
       const messageText = message.body;
 
-      logger.info(`📨 Message from ${phoneNumber}: ${messageText}`);
+      logger.info(`📨 From ${phoneNumber}: ${messageText}`);
 
       const response = await messageRouter.handleMessage(phoneNumber, messageText);
       await this.sendMessage(phoneNumber, response);
     } catch (error) {
-      logger.error('Error handling incoming message:', error);
+      logger.error('Error handling message:', error);
     }
   }
 
   async sendMessage(phoneNumber, message) {
+    if (!this.isReady) {
+      logger.warn(`Cannot send - not ready. isReady=${this.isReady}`);
+      return false;
+    }
     try {
-      if (!this.isReady) {
-        logger.warn(`Cannot send message - client not ready. isReady=${this.isReady}`);
-        return false;
-      }
       await this.client.sendMessage(phoneNumber, message);
-      logger.info(`✉️ Message sent to ${phoneNumber}`);
+      logger.info(`✉️ Sent to ${phoneNumber}`);
       return true;
     } catch (error) {
-      logger.error('Error sending message:', error);
+      logger.error('Send error:', error);
       return false;
     }
   }
 
-  async clearSessionAndRestart() {
+  async clearSession() {
     try {
       const { default: fs } = await import('fs');
       const sessionPath = config.whatsapp.sessionPath;
@@ -194,11 +208,10 @@ class WhatsAppService {
     } catch (err) {
       logger.error('Error clearing session:', err.message);
     }
-    setTimeout(() => this.reconnect(), 5000);
   }
 
   async reconnect() {
-    logger.info('Attempting to reconnect WhatsApp client...');
+    logger.info('Reconnecting...');
     try {
       if (this.client) {
         try { await this.client.destroy(); } catch (_) {}
@@ -208,7 +221,7 @@ class WhatsAppService {
       this.qrCount = 0;
       await this.initialize();
     } catch (error) {
-      logger.error('Reconnection failed:', error);
+      logger.error('Reconnect failed:', error);
       setTimeout(() => this.reconnect(), 15000);
     }
   }

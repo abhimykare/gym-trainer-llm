@@ -12,7 +12,6 @@ function clearOldQRFiles() {
     files.forEach(file => {
       if (file.startsWith('whatsapp-qr')) {
         fs.unlinkSync(`/tmp/${file}`);
-        logger.info(`Cleared old QR file: ${file}`);
       }
     });
   } catch (_) {}
@@ -24,35 +23,45 @@ async function startBot() {
 
     clearOldQRFiles();
 
-    // Connect to MongoDB
-    await connectDatabase();
-    logger.info('✅ MongoDB connected');
-
-    // Initialize WhatsApp (this registers events + calls client.initialize())
-    await whatsappService.initialize();
-
-    // Start reminder scheduler
-    reminderScheduler.start();
-
-    logger.info('✅ Bot startup complete. Waiting for WhatsApp ready event...');
-
-    // Health check HTTP server (required by Render)
+    // 1. Start HTTP server FIRST so Render sees the port immediately
     const PORT = process.env.PORT || 3000;
     const server = http.createServer((req, res) => {
       const ready = whatsappService.isClientReady();
+      const qr = whatsappService.getQRCode();
       res.writeHead(200, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ status: 'running', whatsappReady: ready }));
+      res.end(JSON.stringify({
+        status: 'running',
+        whatsappReady: ready,
+        hasQR: !!qr,
+        qrUrl: qr
+          ? `https://api.qrserver.com/v1/create-qr-code/?size=400x400&data=${encodeURIComponent(qr)}`
+          : null,
+      }));
     });
 
-    server.listen(PORT, () => {
-      logger.info(`Health check server running on port ${PORT}`);
+    server.listen(PORT, '0.0.0.0', () => {
+      logger.info(`✅ HTTP server listening on 0.0.0.0:${PORT}`);
     });
 
-    // Log ready status every 30 seconds so we can see it in Render logs
+    // 2. Connect MongoDB
+    await connectDatabase();
+    logger.info('✅ MongoDB connected');
+
+    // 3. Start WhatsApp init in background - do NOT await it
+    //    initialize() blocks until QR is scanned or session is restored
+    //    which can take minutes on Render
+    logger.info('🔄 Starting WhatsApp init in background...');
+    whatsappService.initialize().catch(err => {
+      logger.error('WhatsApp init error:', err);
+    });
+
+    // 4. Start scheduler
+    reminderScheduler.start();
+
+    // 5. Heartbeat every 20s
     setInterval(() => {
-      const ready = whatsappService.isClientReady();
-      logger.info(`[HEARTBEAT] WhatsApp isReady=${ready}`);
-    }, 30000);
+      logger.info(`[HEARTBEAT] whatsappReady=${whatsappService.isClientReady()}`);
+    }, 20000);
 
   } catch (error) {
     logger.error('Failed to start bot:', error);
@@ -61,13 +70,11 @@ async function startBot() {
 }
 
 process.on('SIGINT', async () => {
-  logger.info('Shutting down gracefully...');
   reminderScheduler.stop();
   process.exit(0);
 });
 
 process.on('SIGTERM', async () => {
-  logger.info('Shutting down gracefully...');
   reminderScheduler.stop();
   process.exit(0);
 });
