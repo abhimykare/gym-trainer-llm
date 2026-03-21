@@ -23,15 +23,28 @@ export class MessageRouter {
       // --- Context & memory ---
       const context = await memoryService.getConversationContext(phoneNumber);
       await memoryService.manageConversationMemory(phoneNumber);
-      await memoryService.autoUpdateProfileFromConversation(phoneNumber, messageText, user);
+      // Fire-and-forget: profile auto-update runs after response to avoid competing for rate limit
+      memoryService.autoUpdateProfileFromConversation(phoneNumber, messageText, user).catch(e =>
+        logger.error('autoUpdateProfile error:', e)
+      );
       const freshUser = await userService.getUserProfile(phoneNumber);
 
-      // --- Stateful gym check flow (8:35 PM check) ---
-      if (freshUser.gymCheckState === 'awaiting_gym_status') {
+      // --- Stateful gym check flow ---
+      // Only honor gymCheckState if it was set recently (within 2 hours of the reminder)
+      const gymCheckActive = freshUser.gymCheckState &&
+        freshUser.gymCheckStateSetAt &&
+        (Date.now() - new Date(freshUser.gymCheckStateSetAt).getTime()) < 2 * 60 * 60 * 1000;
+
+      if (gymCheckActive && freshUser.gymCheckState === 'awaiting_gym_status') {
         return await this._handleGymStatusReply(phoneNumber, messageText, freshUser, context);
       }
-      if (freshUser.gymCheckState === 'awaiting_excuse') {
+      if (gymCheckActive && freshUser.gymCheckState === 'awaiting_excuse') {
         return await this._handleExcuseReply(phoneNumber, messageText, freshUser, context);
+      }
+
+      // Clear stale gymCheckState if window expired
+      if (freshUser.gymCheckState && !gymCheckActive) {
+        await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: null, gymCheckStateSetAt: null } });
       }
 
       // --- Intent routing ---
@@ -129,16 +142,16 @@ export class MessageRouter {
 
     if (isNo) {
       // Move to excuse collection
-      await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_excuse' } });
-      const response = `😤 NOT IN GYM?! WHY NOT?! Give me ONE good reason. And it better be REAL.`;
+      await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_excuse', gymCheckStateSetAt: new Date() } });
+      const response = `Alright, what happened? Give me a real reason — I'm listening. 😤`;
       await conversationService.saveMessage(phoneNumber, response, 'assistant');
       return response;
     }
 
     // Unclear — ask again
-    const response = `Simple question. Are you IN THE GYM right now? YES or NO!`;
+    const response = `Simple question — are you in the gym right now? Yes or no.`;
     await conversationService.saveMessage(phoneNumber, response, 'assistant');
-    await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_gym_status' } });
+    await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_gym_status', gymCheckStateSetAt: new Date() } });
     return response;
   }
 
@@ -220,13 +233,13 @@ export class MessageRouter {
 
   async handleGymMissed(user, context, phoneNumber) {
     // Set state to collect excuse
-    await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_excuse' } });
+    await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_excuse', gymCheckStateSetAt: new Date() } });
     const planned = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
     // Store as pending so it repeats
     await User.findOneAndUpdate({ phoneNumber }, {
       $set: { pendingWorkout: { bodyPart: planned, assignedDate: new Date() } }
     });
-    return `😤 MISSED GYM?! Today was ${planned.toUpperCase()} day!\n\nWHY didn't you go? Give me a REAL reason. NOW.`;
+    return `Missed gym today? Today was *${planned.toUpperCase()}* day.\n\nWhat happened? Give me a real reason.`;
   }
 
   async handleWorkoutRequest(user, context) {

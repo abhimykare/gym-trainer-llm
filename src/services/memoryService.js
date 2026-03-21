@@ -328,7 +328,7 @@ Examples:
 
 JSON:`;
 
-      const raw = await geminiClient.generateResponse(prompt, [], '');
+      const raw = await geminiClient.generateResponseLowPriority(prompt, [], '');
 
       // Extract JSON from response
       const jsonMatch = raw.match(/\{[\s\S]*\}/);

@@ -31,7 +31,7 @@ MONGODB_URI
 mongodb+srv://abhi88wiz_db_user:Jo9T1h6Yxi86DSYi@cluster0.brv90ag.mongodb.net/gym-trainer
 
 GEMINI_API_KEY
-AIzaSyCCPV2AV0bXlGSkKz5KcVi1mTU0oAEIEJM
+AIzaSyAxIhL_24qc4f2wVns-4io3s6vXhvc-_JQ
 
 WHATSAPP_SESSION_PATH
 /app/whatsapp-session

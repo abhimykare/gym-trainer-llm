@@ -98,8 +98,10 @@ class ReminderScheduler {
 
       const message = `⏰ GYM TIME IN 15 MINUTES!\n\nToday: *${planned.toUpperCase()}* day. ${user.gymTime} is YOUR time. No backing out NOW! 😤\n\nGet your bag. Get your water. GO! 💪\n\n💧 Water check: ${eveningTarget}L by now out of ${waterGoal}L.`;
 
-      // Set gymCheckState — their next reply will be treated as gym status
-      await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_gym_status' } });
+      // Set gymCheckState — their next reply will be treated as gym status (within 2h window)
+      await User.findOneAndUpdate({ phoneNumber }, {
+        $set: { gymCheckState: 'awaiting_gym_status', gymCheckStateSetAt: new Date() }
+      });
 
       await whatsappService.sendMessage(phoneNumber, message);
       await conversationService.saveMessage(phoneNumber, message, 'assistant');
@@ -121,10 +123,11 @@ class ReminderScheduler {
         const morningWater = Math.round(waterGoal * 0.4 * 10) / 10;
         const gymTimeDisplay = user.gymTime || 'your gym time';
 
+        // Don't ask "did you go?" in the morning — just hype them up for their scheduled time
         const msgs = [
-          `🌅 WAKE UP ${user.nickname}! It's *${nextBodyParts[0].toUpperCase()}* day! Gym at ${gymTimeDisplay} — be ready! 💪\n\n💧 Drink ${morningWater}L before noon. Total today: ${waterGoal}L. START NOW!`,
-          `☀️ Morning ${user.nickname}! Today: *${nextBodyParts[0].toUpperCase()}*. I'll remind you 15 min before ${gymTimeDisplay}. NO EXCUSES! 🔥\n\n💧 ${morningWater}L by noon, ${waterGoal}L total. Drink up!`,
-          `🌄 UP! NOW ${user.nickname}! *${nextBodyParts[0].toUpperCase()}* day. Gym at ${gymTimeDisplay}. Tomorrow: ${nextBodyParts[1].toUpperCase()}. STAY FOCUSED! 💪\n\n💧 Water goal: ${waterGoal}L today. First ${morningWater}L before noon!`,
+          `🌅 Morning ${user.nickname}! Today is *${nextBodyParts[0].toUpperCase()}* day. I'll remind you 15 min before ${gymTimeDisplay} — be ready. 💪\n\n💧 Start your day with water. Target ${morningWater}L before noon, ${waterGoal}L total.`,
+          `☀️ Good morning ${user.nickname}! *${nextBodyParts[0].toUpperCase()}* is on the menu today. Gym at ${gymTimeDisplay} — no last-minute excuses. 🔥\n\n💧 ${morningWater}L by noon, ${waterGoal}L by end of day. Get drinking.`,
+          `🌄 Up and at it ${user.nickname}! *${nextBodyParts[0].toUpperCase()}* day. I've got ${gymTimeDisplay} locked in for you. Tomorrow: ${nextBodyParts[1].toUpperCase()}. Stay on track. 💪\n\n💧 Water goal: ${waterGoal}L today. First ${morningWater}L before noon.`,
         ];
 
         const msg = msgs[Math.floor(Math.random() * msgs.length)];
@@ -147,9 +150,10 @@ class ReminderScheduler {
         const proteinGoal = Math.round((user.weight || 70) * 1.8);
         const gymTimeDisplay = user.gymTime || 'your gym time';
 
+        // Only nag about missed workout if they had a pending one — otherwise just remind about today
         const msg = isPending
-          ? `😤 ${user.nickname}, you MISSED *${planned.toUpperCase()}* yesterday! It REPEATS today at ${gymTimeDisplay}. No more delays! 💪\n\n🥩 Protein goal: ${proteinGoal}g. Don't skip that either.`
-          : `💪 ${user.nickname} — *${planned.toUpperCase()}* day! Gym at ${gymTimeDisplay}. I'll ping you 15 min before. Be ready! 🔥\n\n🥩 Protein goal: ${proteinGoal}g. Start tracking from breakfast.`;
+          ? `Hey ${user.nickname}, you still owe me *${planned.toUpperCase()}* from yesterday. That repeats today at ${gymTimeDisplay}. Don't even think about skipping again. 💪\n\n🥩 Protein goal: ${proteinGoal}g. Start tracking now.`
+          : `${user.nickname} — *${planned.toUpperCase()}* is on for today at ${gymTimeDisplay}. I'll ping you 15 min before. Just be ready. 🔥\n\n🥩 Protein goal: ${proteinGoal}g. Get it in throughout the day.`;
 
         await whatsappService.sendMessage(user.phoneNumber, msg);
         await conversationService.saveMessage(user.phoneNumber, msg, 'assistant');
