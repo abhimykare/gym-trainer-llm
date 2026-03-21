@@ -168,7 +168,7 @@ export class MessageRouter {
 
     if (!this._isValidExcuse(messageText)) {
       await User.findOneAndUpdate({ phoneNumber }, {
-        $set: { 'pendingWorkout.assignedDate': new Date() }
+        $set: { pendingWorkout: { bodyPart: pendingPart, assignedDate: new Date() } }
       });
     }
 
@@ -288,7 +288,7 @@ RULES:
     const pendingPart = user.pendingWorkout?.bodyPart;
     const missedNote = pendingPart ? `They missed: ${pendingPart}` : `Based on history (${historySummary}), determine what they should have done today.`;
     await User.findOneAndUpdate({ phoneNumber }, {
-      $set: { 'pendingWorkout.assignedDate': new Date() }
+      $set: { pendingWorkout: { bodyPart: pendingPart || 'chest', assignedDate: new Date() } }
     });
     return `Missed gym today?\n\n${missedNote.includes('determine') ? "I know what you skipped." : `Today was *${pendingPart?.toUpperCase()}* day.`}\n\nWhat happened? Give me a real reason.`;
   }
