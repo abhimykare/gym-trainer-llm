@@ -8,198 +8,199 @@ import { logger } from '../utils/logger.js';
 class ReminderScheduler {
   constructor() {
     this.jobs = [];
+    // Map of phoneNumber → cron job for per-user gym reminders
+    this.gymReminderJobs = new Map();
   }
 
   start() {
     logger.info('Starting reminder scheduler...');
 
-    // 7:30 AM - Good morning message
-    const morningGreeting = cron.schedule('30 7 * * *', async () => {
-      await this.sendMorningGreeting();
-    }, {
-      timezone: 'Asia/Kolkata',
-    });
+    // 7:30 AM - Good morning + today's workout + water goal
+    this.jobs.push(cron.schedule('30 7 * * *', () => this.sendMorningGreeting(), { timezone: 'Asia/Kolkata' }));
 
-    // 9:30 AM - Morning gym reminder
-    const morningReminder = cron.schedule('30 9 * * *', async () => {
-      await this.sendMorningGymReminder();
-    }, {
-      timezone: 'Asia/Kolkata',
-    });
+    // 8:00 AM - Protein reminder
+    this.jobs.push(cron.schedule('0 8 * * *', () => this.sendProteinReminder(), { timezone: 'Asia/Kolkata' }));
 
-    // 12:00 PM - Noon greeting
-    const noonGreeting = cron.schedule('0 12 * * *', async () => {
-      await this.sendNoonGreeting();
-    }, {
-      timezone: 'Asia/Kolkata',
-    });
+    // 9:30 AM - Morning gym reminder (pending workout callout)
+    this.jobs.push(cron.schedule('30 9 * * *', () => this.sendMorningGymReminder(), { timezone: 'Asia/Kolkata' }));
 
-    // 8:30 PM - Evening gym check
-    const eveningCheck = cron.schedule('30 20 * * *', async () => {
-      await this.sendEveningGymCheck();
-    }, {
-      timezone: 'Asia/Kolkata',
-    });
+    // 12:00 PM - Noon water + nutrition check
+    this.jobs.push(cron.schedule('0 12 * * *', () => this.sendNoonGreeting(), { timezone: 'Asia/Kolkata' }));
 
-    // 8:00 AM - Morning protein reminder
-    const proteinReminder = cron.schedule('0 8 * * *', async () => {
-      await this.sendProteinReminder();
-    }, {
-      timezone: 'Asia/Kolkata',
-    });
+    // 8:45 PM - Body part check (only for users who visited gym today)
+    this.jobs.push(cron.schedule('45 20 * * *', () => this.sendBodyPartCheck(), { timezone: 'Asia/Kolkata' }));
 
-    // 8:45 PM - Ask what body part they worked
-    const bodyPartCheck = cron.schedule('45 20 * * *', async () => {
-      await this.sendBodyPartCheck();
-    }, {
-      timezone: 'Asia/Kolkata',
-    });
+    // 10:00 PM - Night water completion check
+    this.jobs.push(cron.schedule('0 22 * * *', () => this.sendNightWaterCheck(), { timezone: 'Asia/Kolkata' }));
 
-    this.jobs.push(morningGreeting, morningReminder, noonGreeting, eveningCheck, bodyPartCheck, proteinReminder);
-    
+    // Load dynamic gym reminder for every existing user who has a gymTime set
+    this._loadAllGymReminders();
+
     logger.info('Reminder scheduler started successfully');
   }
 
+  // ─── Dynamic per-user gym reminder ────────────────────────────────────────
+
+  /**
+   * Called once on startup — registers gym reminder crons for all users who have gymTime.
+   */
+  async _loadAllGymReminders() {
+    try {
+      const users = await User.find({ profileComplete: true, gymTime: { $exists: true, $ne: null } });
+      for (const user of users) {
+        this.scheduleGymReminderForUser(user.phoneNumber, user.gymTime);
+      }
+      logger.info(`Loaded gym reminders for ${users.length} users`);
+    } catch (error) {
+      logger.error('Error loading gym reminders:', error);
+    }
+  }
+
+  /**
+   * Schedule (or reschedule) a 15-min-before-gym reminder for a single user.
+   * gymTime format: "HH:MM" (24h), e.g. "19:30"
+   */
+  scheduleGymReminderForUser(phoneNumber, gymTime) {
+    // Cancel existing job for this user if any
+    if (this.gymReminderJobs.has(phoneNumber)) {
+      this.gymReminderJobs.get(phoneNumber).stop();
+      this.gymReminderJobs.delete(phoneNumber);
+    }
+
+    const [hStr, mStr] = gymTime.split(':');
+    let h = parseInt(hStr);
+    let m = parseInt(mStr) - 15;
+
+    if (m < 0) {
+      m += 60;
+      h -= 1;
+    }
+    if (h < 0) h += 24;
+
+    const cronExpr = `${m} ${h} * * *`;
+    logger.info(`Scheduling gym reminder for ${phoneNumber} at ${String(h).padStart(2,'0')}:${String(m).padStart(2,'0')} (15 min before ${gymTime})`);
+
+    const job = cron.schedule(cronExpr, async () => {
+      await this._sendGymReminder(phoneNumber, gymTime);
+    }, { timezone: 'Asia/Kolkata' });
+
+    this.gymReminderJobs.set(phoneNumber, job);
+  }
+
+  async _sendGymReminder(phoneNumber, gymTime) {
+    try {
+      const user = await User.findOne({ phoneNumber });
+      if (!user) return;
+
+      const planned = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
+      const waterGoal = user.dailyWaterGoalLiters || 2.5;
+      const eveningTarget = Math.round(waterGoal * 0.85 * 10) / 10;
+
+      const message = `⏰ GYM TIME IN 15 MINUTES!\n\nToday: *${planned.toUpperCase()}* day. ${user.gymTime} is YOUR time. No backing out NOW! 😤\n\nGet your bag. Get your water. GO! 💪\n\n💧 Water check: ${eveningTarget}L by now out of ${waterGoal}L.`;
+
+      // Set gymCheckState — their next reply will be treated as gym status
+      await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_gym_status' } });
+
+      await whatsappService.sendMessage(phoneNumber, message);
+      await conversationService.saveMessage(phoneNumber, message, 'assistant');
+
+      logger.info(`Gym reminder sent to ${phoneNumber}`);
+    } catch (error) {
+      logger.error(`Error sending gym reminder to ${phoneNumber}:`, error);
+    }
+  }
+
+  // ─── Scheduled broadcasts ─────────────────────────────────────────────────
+
   async sendMorningGreeting() {
     try {
-      logger.info('Sending morning greetings with workout plans...');
-      
-      const users = await User.find({});
-      
+      const users = await User.find({ profileComplete: true });
       for (const user of users) {
-        // Get next body parts based on last workout
         const nextBodyParts = this.getNextBodyParts(user.lastBodyPartWorked);
-        
-        const morningMessages = [
-          `🌅 WAKE UP! It's ${nextBodyParts[0].toUpperCase()} day today! No excuses! Get ready to work! 💪`,
-          `☀️ Morning! Today we're hitting ${nextBodyParts[0].toUpperCase()}! Last time you did ${user.lastBodyPartWorked || 'nothing'}, so it's time for ${nextBodyParts[0]}! Let's GO! 🔥`,
-          `🌄 UP! NOW! Today is ${nextBodyParts[0].toUpperCase()} day! You rested enough. Time to WORK! 💪`,
-          `🌞 Good morning! ${nextBodyParts[0].toUpperCase()} workout today! After that, tomorrow is ${nextBodyParts[1]}! Stay focused! 🔥`,
+        const waterGoal = user.dailyWaterGoalLiters || 2.5;
+        const morningWater = Math.round(waterGoal * 0.4 * 10) / 10;
+        const gymTimeDisplay = user.gymTime || 'your gym time';
+
+        const msgs = [
+          `🌅 WAKE UP ${user.nickname}! It's *${nextBodyParts[0].toUpperCase()}* day! Gym at ${gymTimeDisplay} — be ready! 💪\n\n💧 Drink ${morningWater}L before noon. Total today: ${waterGoal}L. START NOW!`,
+          `☀️ Morning ${user.nickname}! Today: *${nextBodyParts[0].toUpperCase()}*. I'll remind you 15 min before ${gymTimeDisplay}. NO EXCUSES! 🔥\n\n💧 ${morningWater}L by noon, ${waterGoal}L total. Drink up!`,
+          `🌄 UP! NOW ${user.nickname}! *${nextBodyParts[0].toUpperCase()}* day. Gym at ${gymTimeDisplay}. Tomorrow: ${nextBodyParts[1].toUpperCase()}. STAY FOCUSED! 💪\n\n💧 Water goal: ${waterGoal}L today. First ${morningWater}L before noon!`,
         ];
-        
-        const randomMessage = morningMessages[Math.floor(Math.random() * morningMessages.length)];
-        
-        await whatsappService.sendMessage(user.phoneNumber, randomMessage);
-        await conversationService.saveMessage(user.phoneNumber, randomMessage, 'assistant');
-        
+
+        const msg = msgs[Math.floor(Math.random() * msgs.length)];
+        await whatsappService.sendMessage(user.phoneNumber, msg);
+        await conversationService.saveMessage(user.phoneNumber, msg, 'assistant');
         await this.delay(1000);
       }
-      
-      logger.info(`Morning greetings with workout plans sent to ${users.length} users`);
+      logger.info(`Morning greetings sent to ${users.length} users`);
     } catch (error) {
       logger.error('Error sending morning greetings:', error);
     }
   }
 
-  getNextBodyParts(lastBodyPart) {
-    const schedule = {
-      'chest': ['back', 'legs'],
-      'back': ['legs', 'shoulders'],
-      'legs': ['chest', 'arms'],
-      'shoulders': ['arms', 'chest'],
-      'arms': ['back', 'legs'],
-      'biceps': ['triceps', 'legs'],
-      'triceps': ['chest', 'back'],
-      'core': ['legs', 'chest'],
-      'abs': ['back', 'shoulders'],
-    };
-    
-    return schedule[lastBodyPart] || ['chest', 'back'];
-  }
-
-  async sendNoonGreeting() {
-    try {
-      logger.info('Sending noon greetings...');
-      
-      const users = await User.find({});
-      
-      const noonMessages = [
-        '🌤️ NOON CHECK! Did you eat protein? Stay hydrated! No slacking! 💧',
-        '☀️ Midday! How\'s your nutrition? Better be eating right! 🥗',
-        '🌞 Afternoon! Water intake? Protein? Don\'t make me ask twice! 💪',
-        '🌤️ LUNCH TIME! Better be eating clean! No junk food! 🍎',
-      ];
-      
-      for (const user of users) {
-        const randomMessage = noonMessages[Math.floor(Math.random() * noonMessages.length)];
-        
-        await whatsappService.sendMessage(user.phoneNumber, randomMessage);
-        await conversationService.saveMessage(user.phoneNumber, randomMessage, 'assistant');
-        
-        await this.delay(1000);
-      }
-      
-      logger.info(`Noon greetings sent to ${users.length} users`);
-    } catch (error) {
-      logger.error('Error sending noon greetings:', error);
-    }
-  }
-
   async sendMorningGymReminder() {
     try {
-      logger.info('Sending morning gym reminders...');
-      
-      const users = await User.find({});
-      
+      const users = await User.find({ profileComplete: true });
       for (const user of users) {
-        const message = '💪 Hey! Just a friendly reminder - have you planned your gym session for today? Let\'s keep that momentum going! You got this! 🔥';
-        
-        await whatsappService.sendMessage(user.phoneNumber, message);
-        await conversationService.saveMessage(user.phoneNumber, message, 'assistant');
-        
-        // Small delay to avoid rate limiting
+        const planned = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
+        const isPending = !!user.pendingWorkout?.bodyPart;
+        const proteinGoal = Math.round((user.weight || 70) * 1.8);
+        const gymTimeDisplay = user.gymTime || 'your gym time';
+
+        const msg = isPending
+          ? `😤 ${user.nickname}, you MISSED *${planned.toUpperCase()}* yesterday! It REPEATS today at ${gymTimeDisplay}. No more delays! 💪\n\n🥩 Protein goal: ${proteinGoal}g. Don't skip that either.`
+          : `💪 ${user.nickname} — *${planned.toUpperCase()}* day! Gym at ${gymTimeDisplay}. I'll ping you 15 min before. Be ready! 🔥\n\n🥩 Protein goal: ${proteinGoal}g. Start tracking from breakfast.`;
+
+        await whatsappService.sendMessage(user.phoneNumber, msg);
+        await conversationService.saveMessage(user.phoneNumber, msg, 'assistant');
         await this.delay(1000);
       }
-      
       logger.info(`Morning reminders sent to ${users.length} users`);
     } catch (error) {
       logger.error('Error sending morning gym reminders:', error);
     }
   }
 
-  async sendEveningGymCheck() {
+  async sendNoonGreeting() {
     try {
-      logger.info('Sending evening gym checks...');
-      
-      const users = await User.find({});
-      
+      const users = await User.find({ profileComplete: true });
       for (const user of users) {
-        const message = '🌆 Evening check-in! So, did you make it to the gym today? Reply YES if you crushed it, or NO if you need some motivation! 😊';
-        
-        await whatsappService.sendMessage(user.phoneNumber, message);
-        await conversationService.saveMessage(user.phoneNumber, message, 'assistant');
-        
+        const waterGoal = user.dailyWaterGoalLiters || 2.5;
+        const afternoonTarget = Math.round(waterGoal * 0.7 * 10) / 10;
+        const proteinGoal = Math.round((user.weight || 70) * 1.8);
+
+        const msgs = [
+          `🌤️ NOON CHECK ${user.nickname}! Protein on track? You should be at ${afternoonTarget}L water by now. ${waterGoal}L total today! 💧`,
+          `☀️ Midday ${user.nickname}! Eating clean? 🥗\n\n💧 Water: ${afternoonTarget}L by now out of ${waterGoal}L. 🥩 Protein: hit ${proteinGoal}g today!`,
+          `🌞 Afternoon! Water: ${afternoonTarget}L by now. Protein: ${proteinGoal}g goal. Don't make me ask twice! 💪`,
+        ];
+
+        const msg = msgs[Math.floor(Math.random() * msgs.length)];
+        await whatsappService.sendMessage(user.phoneNumber, msg);
+        await conversationService.saveMessage(user.phoneNumber, msg, 'assistant');
         await this.delay(1000);
       }
-      
-      logger.info(`Evening checks sent to ${users.length} users`);
+      logger.info(`Noon greetings sent to ${users.length} users`);
     } catch (error) {
-      logger.error('Error sending evening gym checks:', error);
+      logger.error('Error sending noon greetings:', error);
     }
   }
 
   async sendBodyPartCheck() {
     try {
-      logger.info('Sending body part checks...');
-      
-      const users = await User.find({});
-      
+      const users = await User.find({ profileComplete: true });
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+
       for (const user of users) {
-        // Check if they went to gym today
-        const today = new Date();
-        today.setHours(0, 0, 0, 0);
-        
         if (user.lastGymVisit && user.lastGymVisit >= today) {
-          const message = '💪 REPORT! What body part did you destroy today? Chest? Back? Legs? Arms? Shoulders? Tell me NOW!';
-          
-          await whatsappService.sendMessage(user.phoneNumber, message);
-          await conversationService.saveMessage(user.phoneNumber, message, 'assistant');
+          const msg = `💪 REPORT ${user.nickname}! What body part did you destroy today? Chest? Back? Legs? Arms? Shoulders? Tell me NOW!`;
+          await whatsappService.sendMessage(user.phoneNumber, msg);
+          await conversationService.saveMessage(user.phoneNumber, msg, 'assistant');
         }
-        
         await this.delay(1000);
       }
-      
-      logger.info(`Body part checks sent`);
+      logger.info('Body part checks sent');
     } catch (error) {
       logger.error('Error sending body part checks:', error);
     }
@@ -207,28 +208,58 @@ class ReminderScheduler {
 
   async sendProteinReminder() {
     try {
-      logger.info('Sending protein reminders...');
-      
-      const users = await User.find({});
-      
+      const users = await User.find({ profileComplete: true });
       for (const user of users) {
+        const proteinGoal = Math.round((user.weight || 70) * 1.8);
         const history = await conversationService.getConversationHistory(user.phoneNumber, 5);
-        
-        const message = await geminiClient.generateResponse(
-          'Ask the user in a friendly, humanistic way if they completed their protein goal yesterday. Be warm and encouraging like a friend checking in.',
-          history
-        );
-        
-        await whatsappService.sendMessage(user.phoneNumber, message);
-        await conversationService.saveMessage(user.phoneNumber, message, 'assistant');
-        
+        const prompt = `User's daily protein goal is ${proteinGoal}g (weight ${user.weight || 70}kg × 1.8). Ask them STRICTLY if they've hit their ${proteinGoal}g protein goal today. Be direct and commanding. No protein = no muscle recovery. Under 3 lines.`;
+        const msg = await geminiClient.generateResponse(prompt, history);
+        await whatsappService.sendMessage(user.phoneNumber, msg);
+        await conversationService.saveMessage(user.phoneNumber, msg, 'assistant');
         await this.delay(1000);
       }
-      
       logger.info(`Protein reminders sent to ${users.length} users`);
     } catch (error) {
       logger.error('Error sending protein reminders:', error);
     }
+  }
+
+  async sendNightWaterCheck() {
+    try {
+      const users = await User.find({ profileComplete: true });
+      for (const user of users) {
+        const waterGoal = user.dailyWaterGoalLiters || 2.5;
+        const msgs = [
+          `🌙 Good night ${user.nickname}! Did you complete your ${waterGoal}L water goal today? Hydration = recovery. Answer honestly! 💧`,
+          `🌛 Night check! ${waterGoal}L water — done or not? Muscles recover while you sleep. Hydrate NOW! 💧`,
+          `🌜 Bedtime soon ${user.nickname}! Hit your ${waterGoal}L water goal? If not, drink a glass NOW. Recovery starts tonight! 💪`,
+        ];
+        const msg = msgs[Math.floor(Math.random() * msgs.length)];
+        await whatsappService.sendMessage(user.phoneNumber, msg);
+        await conversationService.saveMessage(user.phoneNumber, msg, 'assistant');
+        await this.delay(1000);
+      }
+      logger.info(`Night water checks sent to ${users.length} users`);
+    } catch (error) {
+      logger.error('Error sending night water checks:', error);
+    }
+  }
+
+  // ─── Helpers ──────────────────────────────────────────────────────────────
+
+  getNextBodyParts(lastBodyPart) {
+    const schedule = {
+      'chest':     ['back', 'legs'],
+      'back':      ['legs', 'shoulders'],
+      'legs':      ['chest', 'arms'],
+      'shoulders': ['arms', 'chest'],
+      'arms':      ['back', 'legs'],
+      'biceps':    ['triceps', 'legs'],
+      'triceps':   ['chest', 'back'],
+      'core':      ['legs', 'chest'],
+      'abs':       ['back', 'shoulders'],
+    };
+    return schedule[lastBodyPart] || ['chest', 'back'];
   }
 
   delay(ms) {
@@ -238,6 +269,7 @@ class ReminderScheduler {
   stop() {
     logger.info('Stopping reminder scheduler...');
     this.jobs.forEach(job => job.stop());
+    this.gymReminderJobs.forEach(job => job.stop());
     logger.info('Reminder scheduler stopped');
   }
 }

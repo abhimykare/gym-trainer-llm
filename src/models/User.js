@@ -52,6 +52,28 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: false,
   },
+  // Onboarding stage: 'nickname' | 'age' | 'height' | 'weight' | 'gymTime' | 'complete'
+  stage: {
+    type: String,
+    default: 'nickname',
+  },
+  dailyWaterGoalLiters: {
+    type: Number,
+  },
+  // User's preferred gym time in "HH:MM" 24h format e.g. "19:30"
+  gymTime: {
+    type: String,
+  },
+  // Stores the workout that must repeat if gym was missed
+  pendingWorkout: {
+    bodyPart: String,
+    assignedDate: Date,
+  },
+  // Tracks state of the 8:35 PM gym check flow: null | 'awaiting_gym_status' | 'awaiting_excuse'
+  gymCheckState: {
+    type: String,
+    default: null,
+  },
   createdAt: {
     type: Date,
     default: Date.now,
