@@ -44,6 +44,11 @@ const userSchema = new mongoose.Schema({
     bodyPart: String,
     date: Date,
   }],
+  // Tracks last 14 workout sessions: [{bodyParts: ['chest','triceps'], date: Date}]
+  workoutHistory: [{
+    bodyParts: [String],
+    date: { type: Date, default: Date.now },
+  }],
   conversationSummary: {
     type: String,
     default: '',
@@ -72,6 +77,10 @@ const userSchema = new mongoose.Schema({
   // Tracks state of the 8:35 PM gym check flow: null | 'awaiting_gym_status' | 'awaiting_excuse'
   gymCheckState: {
     type: String,
+    default: null,
+  },
+  gymCheckStateSetAt: {
+    type: Date,
     default: null,
   },
   createdAt: {

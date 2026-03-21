@@ -71,10 +71,12 @@ class WhatsAppService {
           this.initAttempt = 0;
           this.qrCodeData = null;
           logger.info('🚀 WhatsApp is READY! Bot is active.');
+          this._startKeepAlive();
         }
 
         if (connection === 'close') {
           this.isReady = false;
+          this._stopKeepAlive();
           const statusCode = lastDisconnect?.error instanceof Boom
             ? lastDisconnect.error.output.statusCode
             : 0;
@@ -151,6 +153,27 @@ class WhatsAppService {
   getClient() { return this.sock; }
   getQRCode() { return this.qrCodeData; }
   isClientReady() { return this.isReady; }
+
+  _startKeepAlive() {
+    this._stopKeepAlive();
+    // Send a presence update every 25s to keep the WA connection alive
+    this._keepAliveInterval = setInterval(async () => {
+      try {
+        if (this.sock && this.isReady) {
+          await this.sock.sendPresenceUpdate('available');
+        }
+      } catch (e) {
+        logger.warn('Keep-alive ping failed:', e.message);
+      }
+    }, 25000);
+  }
+
+  _stopKeepAlive() {
+    if (this._keepAliveInterval) {
+      clearInterval(this._keepAliveInterval);
+      this._keepAliveInterval = null;
+    }
+  }
 }
 
 export const whatsappService = new WhatsAppService();
