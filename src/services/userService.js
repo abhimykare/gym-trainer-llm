@@ -62,6 +62,36 @@ export const userService = {
     }
   },
 
+  async recordWorkoutDone(phoneNumber, bodyParts) {
+    try {
+      // bodyParts is an array e.g. ['chest', 'triceps']
+      const parts = Array.isArray(bodyParts) ? bodyParts : [bodyParts];
+      const user = await User.findOneAndUpdate(
+        { phoneNumber },
+        {
+          $set: {
+            lastGymVisit: new Date(),
+            lastWorkoutDate: new Date(),
+            lastBodyPartWorked: parts[0],
+            pendingWorkout: null,
+          },
+          $push: {
+            workoutHistory: {
+              $each: [{ bodyParts: parts, date: new Date() }],
+              $slice: -28, // keep last 28 sessions (~4 weeks)
+            },
+          },
+        },
+        { new: true }
+      );
+      logger.info(`Workout recorded for ${phoneNumber}: ${parts.join('+')}`);
+      return user;
+    } catch (error) {
+      logger.error('Error recording workout:', error);
+      throw error;
+    }
+  },
+
   async getUserProfile(phoneNumber) {
     try {
       return await User.findOne({ phoneNumber });

@@ -252,6 +252,7 @@ class ReminderScheduler {
   // ─── Helpers ──────────────────────────────────────────────────────────────
 
   getNextBodyParts(lastBodyPart) {
+    // Simple fallback rotation for reminder messages (LLM handles actual workout planning)
     const schedule = {
       'chest':     ['back', 'legs'],
       'back':      ['legs', 'shoulders'],

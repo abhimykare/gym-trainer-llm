@@ -133,11 +133,9 @@ export class MessageRouter {
 
     if (isYes) {
       await userService.recordGymVisit(phoneNumber);
-      const planned = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
-      const prompt = `User confirmed they are in the gym RIGHT NOW. Today's workout is ${planned.toUpperCase()}. Generate the full workout plan immediately. Be energetic and commanding. Format with sets, reps, rest.`;
-      const response = await geminiClient.generateResponse(prompt, context);
-      await conversationService.saveMessage(phoneNumber, response, 'assistant');
-      return response;
+      const plan = await this._getSmartWorkoutPlan(user, context, 'User confirmed they are in the gym RIGHT NOW. Give the plan immediately, energetically.');
+      await conversationService.saveMessage(phoneNumber, plan, 'assistant');
+      return plan;
     }
 
     if (isNo) {
@@ -160,16 +158,15 @@ export class MessageRouter {
   async _handleExcuseReply(phoneNumber, messageText, user, context) {
     await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: null } });
 
-    const planned = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
+    const historySummary = this._buildWorkoutHistorySummary(user);
+    const pendingPart = user.pendingWorkout?.bodyPart || 'today\'s session';
     const prompt = EXCUSE_EVALUATION_PROMPT.replace('{EXCUSE}', messageText)
-      + `\n\nContext: Today's planned workout was ${planned.toUpperCase()}.`
+      + `\n\nContext: Missed workout was ${pendingPart}. History: ${historySummary}.`
       + (this._isValidExcuse(messageText)
-          ? `\nThis is a VALID excuse. Accept it. Tell them ${planned.toUpperCase()} repeats tomorrow. No mercy after this.`
-          : `\nThis is an INVALID excuse. DESTROY it. Give specific solution. Command them to go NOW or first thing tomorrow. Remind them the workout repeats until they do it.`);
+          ? `\nThis is a VALID excuse. Accept it. Tell them the same session repeats tomorrow.`
+          : `\nThis is an INVALID excuse. Push back firmly but humanly. Give a specific solution. Tell them to go tonight or first thing tomorrow.`);
 
-    // If valid, keep pendingWorkout so it repeats tomorrow
     if (!this._isValidExcuse(messageText)) {
-      // Keep pending workout — repeats tomorrow
       await User.findOneAndUpdate({ phoneNumber }, {
         $set: { 'pendingWorkout.assignedDate': new Date() }
       });
@@ -209,47 +206,97 @@ export class MessageRouter {
 
   // ─── Handlers ──────────────────────────────────────────────────────────────
 
+  // Build a workout history summary string for the LLM
+  _buildWorkoutHistorySummary(user) {
+    const history = user.workoutHistory || [];
+    if (history.length === 0) return 'No workout history. This is their first session.';
+
+    const now = Date.now();
+    const oneWeek = 7 * 24 * 60 * 60 * 1000;
+    const twoWeeks = 14 * 24 * 60 * 60 * 1000;
+
+    const thisWeek = history.filter(w => now - new Date(w.date).getTime() < oneWeek);
+    const lastWeek = history.filter(w => {
+      const age = now - new Date(w.date).getTime();
+      return age >= oneWeek && age < twoWeeks;
+    });
+    const older = history.filter(w => now - new Date(w.date).getTime() >= twoWeeks);
+
+    const fmt = sessions => sessions.map(w =>
+      `${new Date(w.date).toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' })}: ${w.bodyParts.join('+')}`
+    ).join(', ');
+
+    let summary = '';
+    if (thisWeek.length) summary += `This week: ${fmt(thisWeek)}. `;
+    if (lastWeek.length) summary += `Last week: ${fmt(lastWeek)}. `;
+    if (older.length) summary += `Earlier: ${fmt(older.slice(-4))}. `;
+    return summary.trim() || 'No recent history.';
+  }
+
+  async _getSmartWorkoutPlan(user, context, extraInstruction = '') {
+    const historySummary = this._buildWorkoutHistorySummary(user);
+    const isPending = !!user.pendingWorkout?.bodyPart;
+    const pendingNote = isPending
+      ? `IMPORTANT: User missed their last workout (${user.pendingWorkout.bodyPart}). That session must repeat today.`
+      : '';
+
+    const prompt = `You are a professional gym trainer planning today's workout.
+
+User: ${user.nickname}, ${user.age}y, ${user.height}cm, ${user.weight}kg.
+Workout history: ${historySummary}
+${pendingNote}
+${extraInstruction}
+
+RULES:
+- Always pair 2 complementary muscle groups per session (e.g. Chest+Triceps, Back+Biceps, Legs+Shoulders, etc.)
+- Default first session (no history) = Chest + Triceps
+- Never repeat the same muscle group from the previous session
+- Look at the full history to ensure proper weekly rotation — avoid repeating what was done this week if possible
+- A full week should ideally cover: Chest+Triceps, Back+Biceps, Legs+Shoulders, Arms+Core (4 days)
+- Generate exactly 6 exercises total (3 per muscle group)
+- Format each exercise: name, sets x reps, rest time
+- Start with the muscle combo decision, then list exercises
+- Be direct and motivating, not robotic`;
+
+    return geminiClient.generateResponse(prompt, context);
+  }
+
   async handleGymConfirmation(user, context, message) {
     await userService.recordGymVisit(user.phoneNumber);
 
+    // Check if they mentioned a specific body part they already did
     const bodyParts = ['chest', 'back', 'legs', 'shoulders', 'arms', 'biceps', 'triceps', 'core', 'abs'];
     const mentioned = bodyParts.find(p => message.toLowerCase().includes(p));
 
     if (mentioned) {
-      await userService.updateUserProfile(user.phoneNumber, {
-        lastBodyPartWorked: mentioned,
-        lastWorkoutDate: new Date(),
-        pendingWorkout: null,
-      });
-      return `GOOD! ${mentioned.toUpperCase()} day DONE! 💪 That's what I like to see!\n\nREST that muscle. Tomorrow we hit ${this.getNextBodyParts(mentioned)[0].toUpperCase()}. I'll remind you in the morning! 🔥`;
+      // They told us what they did — record it and acknowledge
+      await userService.recordWorkoutDone(user.phoneNumber, [mentioned]);
+      const historySummary = this._buildWorkoutHistorySummary(await userService.getUserProfile(user.phoneNumber));
+      const prompt = `User just finished ${mentioned.toUpperCase()} at the gym. Acknowledge it with genuine energy. Then tell them what their next session should be based on this history: ${historySummary}. Keep it short.`;
+      return geminiClient.generateResponse(prompt, context);
     }
 
-    // They confirmed gym but didn't say body part — give today's planned workout
-    const planned = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
-    const prompt = `User is at the gym. Today's workout: ${planned.toUpperCase()}. Generate full workout plan now. Be commanding and direct. Sets, reps, rest time.`;
-    const response = await geminiClient.generateResponse(prompt, context);
-    return response;
+    // They're at the gym — give them today's smart plan
+    const plan = await this._getSmartWorkoutPlan(user, context, 'User just confirmed they are at the gym right now. Give them the plan immediately.');
+    return plan;
   }
 
   async handleGymMissed(user, context, phoneNumber) {
-    // Set state to collect excuse
     await User.findOneAndUpdate({ phoneNumber }, { $set: { gymCheckState: 'awaiting_excuse', gymCheckStateSetAt: new Date() } });
-    const planned = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
-    // Store as pending so it repeats
+    const historySummary = this._buildWorkoutHistorySummary(user);
+    // Figure out what they should have done
+    const pendingPart = user.pendingWorkout?.bodyPart;
+    const missedNote = pendingPart ? `They missed: ${pendingPart}` : `Based on history (${historySummary}), determine what they should have done today.`;
     await User.findOneAndUpdate({ phoneNumber }, {
-      $set: { pendingWorkout: { bodyPart: planned, assignedDate: new Date() } }
+      $set: { 'pendingWorkout.assignedDate': new Date() }
     });
-    return `Missed gym today? Today was *${planned.toUpperCase()}* day.\n\nWhat happened? Give me a real reason.`;
+    return `Missed gym today?\n\n${missedNote.includes('determine') ? "I know what you skipped." : `Today was *${pendingPart?.toUpperCase()}* day.`}\n\nWhat happened? Give me a real reason.`;
   }
 
   async handleWorkoutRequest(user, context) {
-    // If there's a pending (missed) workout, repeat it
-    const bodyPart = user.pendingWorkout?.bodyPart || this.getNextBodyParts(user.lastBodyPartWorked)[0];
     const isPending = !!user.pendingWorkout?.bodyPart;
-
-    const prompt = `${isPending ? `User missed this workout before. It REPEATS today. Be strict about it. ` : ''}Generate workout plan for ${bodyPart.toUpperCase()}. 4-5 exercises. Sets, reps, rest. Be COMMANDING.`;
-    const response = await geminiClient.generateResponse(prompt, context);
-    return response;
+    const extra = isPending ? `User missed their previous workout (${user.pendingWorkout.bodyPart}). Repeat it today, be firm about it.` : '';
+    return this._getSmartWorkoutPlan(user, context, extra);
   }
 
   async handleBodyPartWorkout(user, context, message) {
@@ -257,16 +304,18 @@ export class MessageRouter {
     const mentioned = bodyParts.find(p => message.toLowerCase().includes(p));
 
     if (mentioned) {
-      await userService.updateUserProfile(user.phoneNumber, {
-        lastBodyPartWorked: mentioned,
-        lastWorkoutDate: new Date(),
-        pendingWorkout: null,
-      });
-      const prompt = `Generate STRICT workout plan for ${mentioned.toUpperCase()}. 4-5 exercises with sets, reps, rest. Be DIRECT and COMMANDING.`;
-      return await geminiClient.generateResponse(prompt, context);
+      const historySummary = this._buildWorkoutHistorySummary(user);
+      const prompt = `User wants to train ${mentioned.toUpperCase()} today.
+History: ${historySummary}
+Pick the best complementary muscle to pair with ${mentioned.toUpperCase()} based on the history (avoid repeating recent combos).
+Generate 6 exercises total (3 per muscle group). Sets, reps, rest. Be direct.`;
+      const response = await geminiClient.generateResponse(prompt, context);
+      // Record the workout
+      await userService.recordWorkoutDone(user.phoneNumber, [mentioned]);
+      return response;
     }
 
-    return `Which body part? Be SPECIFIC! Chest? Back? Legs? Arms? Shoulders?`;
+    return `Which body part? Chest? Back? Legs? Arms? Shoulders? Be specific.`;
   }
 
   async handleProteinDone(user, context) {
@@ -290,21 +339,6 @@ export class MessageRouter {
   }
 
   // ─── Helpers ───────────────────────────────────────────────────────────────
-
-  getNextBodyParts(lastBodyPart) {
-    const schedule = {
-      'chest':    ['back', 'legs'],
-      'back':     ['legs', 'shoulders'],
-      'legs':     ['chest', 'arms'],
-      'shoulders':['arms', 'chest'],
-      'arms':     ['back', 'legs'],
-      'biceps':   ['triceps', 'legs'],
-      'triceps':  ['chest', 'back'],
-      'core':     ['legs', 'chest'],
-      'abs':      ['back', 'shoulders'],
-    };
-    return schedule[lastBodyPart] || ['chest', 'back'];
-  }
 
   getHelpMessage() {
     return `🏋️ *Arnold — Your 24/7 STRICT Trainer*
